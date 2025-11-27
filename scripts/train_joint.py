@@ -9,13 +9,17 @@ import argparse
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 try:
     import tensorflow as tf
 except Exception:  # pragma: no cover
     tf = None  # type: ignore
 
 try:
-    from train_content_encoder import build_autoencoder  # type: ignore
+    from scripts.train_content_encoder import build_autoencoder  # type: ignore
 except Exception:  # pragma: no cover
     build_autoencoder = None  # type: ignore
 

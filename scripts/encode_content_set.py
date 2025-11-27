@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-"""
-Template script to encode a glyph dataset using a content encoder.
-"""
+"""Template script to encode a glyph dataset using a content encoder."""
 
 import argparse
-import os
+import sys
 from pathlib import Path
 from typing import List
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 from PIL import Image
 
 try:
-    from train_content_encoder import build_dataset  # type: ignore
+    from scripts.train_content_encoder import build_dataset  # type: ignore
 except Exception:  # pragma: no cover
     build_dataset = None
 
