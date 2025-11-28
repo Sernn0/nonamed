@@ -85,4 +85,4 @@ if __name__ == "__main__":
         out = model([c, s])
         print("Decoder output shape:", out.shape)
     else:
-        print("TensorFlow not available; decoder skeleton loaded.")***
+        print("TensorFlow not available; decoder skeleton loaded.")

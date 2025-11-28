@@ -69,4 +69,4 @@ if __name__ == "__main__":
         out = model(dummy)
         print("Style vector shape:", out.shape)
     else:
-        print("TensorFlow not available; style encoder skeleton loaded.")***
+        print("TensorFlow not available; style encoder skeleton loaded.")
