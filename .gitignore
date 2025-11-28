@@ -1,6 +1,9 @@
-memo.txt
-*DS_store
-/runs/autoenc
 .vscode
-/data
 __pycache__
+*DS_store
+
+/runs/autoenc
+
+data/content_font/
+data/handwriting_json/
+data/handwriting_raw/
