@@ -3,3 +3,4 @@ memo.txt
 /runs/autoenc
 .vscode
 /data
+__pycache__

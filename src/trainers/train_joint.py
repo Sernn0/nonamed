@@ -24,12 +24,12 @@ except Exception:  # pragma: no cover
     build_autoencoder = None  # type: ignore
 
 try:
-    from src.models.style_encoder.style_encoder import build_style_encoder
+    from src.models.style_encoder import build_style_encoder
 except Exception:  # pragma: no cover
     build_style_encoder = None  # type: ignore
 
 try:
-    from src.models.decoder.decoder import build_decoder
+    from src.models.decoder import build_decoder
 except Exception:  # pragma: no cover
     build_decoder = None  # type: ignore
 
