@@ -9,7 +9,7 @@ import argparse
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -19,17 +19,17 @@ except Exception:  # pragma: no cover
     tf = None  # type: ignore
 
 try:
-    from scripts.train_content_encoder import build_autoencoder  # type: ignore
+    from src.trainers.train_content_encoder import build_autoencoder  # type: ignore
 except Exception:  # pragma: no cover
     build_autoencoder = None  # type: ignore
 
 try:
-    from models.style_encoder import build_style_encoder
+    from src.models.style_encoder.style_encoder import build_style_encoder
 except Exception:  # pragma: no cover
     build_style_encoder = None  # type: ignore
 
 try:
-    from models.decoder import build_decoder
+    from src.models.decoder.decoder import build_decoder
 except Exception:  # pragma: no cover
     build_decoder = None  # type: ignore
 

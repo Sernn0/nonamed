@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 
 try:
-    from scripts.train_content_encoder import build_dataset  # type: ignore
+    from src.trainers.train_content_encoder import build_dataset  # type: ignore
 except Exception:  # pragma: no cover
     build_dataset = None
 
