@@ -17,35 +17,32 @@ DEFAULT_REPORT = Path("data/handwriting_processed/schema_check_report.json")
 DEFAULT_ROOT = Path("data/handwriting_raw/resizing")
 
 
-def resolve_path(path_str: str, root: Optional[Path]) -> str:
+def resolve_path(path_str: str, root: Optional[Path], writer_id: Optional[str]) -> str:
     """
-    Resolve image path against optional root, handling leading slash paths
-    and writer_id subfolders (root/<writer_id>/<filename>).
+    Resolve image path against optional root.
+    Tries, in order:
+      1) path_str as-is (absolute or relative)
+      2) root / path_str (if root given)
+      3) root / writer_id / filename (if writer_id given)
+      4) root / filename (fallback)
+    Returns the first candidate (even if missing) for reporting.
     """
-    if not root:
-        return str(Path(path_str))
+    candidates = [Path(path_str)]
 
-    # Strip leading slash to handle paths like "/data/handwriting_raw/resizing/..."
-    normalized = Path(path_str.lstrip("/"))
-    root_parts = list(root.parts)
-    norm_parts = list(normalized.parts)
+    if root:
+        candidates.append(root / Path(path_str))
 
-    # If normalized path already contains the root prefix, drop it.
-    if norm_parts[: len(root_parts)] == root_parts:
-        remaining = Path(*norm_parts[len(root_parts) :])
-        # If remaining is already in writer_id/filename form, just join.
-        if len(remaining.parts) >= 2:
-            return str(root / remaining)
-        return str(root / remaining)
+    filename = Path(path_str).name
+    if root and writer_id:
+        candidates.append(root / str(writer_id) / filename)
+    if root:
+        candidates.append(root / filename)
 
-    # If writer_id and filename exist, interpret as writer_id/<filename>
-    if len(norm_parts) >= 2:
-        writer_id = norm_parts[0]
-        filename = Path(*norm_parts[1:])
-        return str(root / writer_id / filename)
-
-    # Otherwise, treat as relative to root.
-    return str(root / normalized)
+    for cand in candidates:
+        if cand.exists():
+            return str(cand)
+    # If none exist, return the last candidate for reporting.
+    return str(candidates[-1])
 
 
 def validate_entry(entry: Dict, root: Optional[Path]) -> List[str]:
@@ -59,10 +56,13 @@ def validate_entry(entry: Dict, root: Optional[Path]) -> List[str]:
         if not isinstance(path, str):
             problems.append("image_path_not_str")
         else:
-            resolved = resolve_path(path, root)
+            writer_id = entry.get("writer_id")
+            if isinstance(writer_id, int):
+                writer_id = f"{writer_id:03d}"
+            resolved = resolve_path(path, root, writer_id if isinstance(writer_id, str) else None)
+            entry["resolved_image_path"] = resolved
             if not os.path.exists(resolved):
                 problems.append("image_missing")
-                entry["resolved_image_path"] = resolved
     if "text" in entry and not isinstance(entry.get("text"), str):
         problems.append("text_not_str")
     if "text_id" in entry and not isinstance(entry.get("text_id"), int):

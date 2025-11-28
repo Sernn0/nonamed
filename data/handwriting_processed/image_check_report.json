@@ -1,0 +1,8 @@
+{
+  "status": "ok",
+  "checked_files": [
+    "data/handwriting_processed/handwriting_index_train.json",
+    "data/handwriting_processed/handwriting_index_val.json",
+    "data/handwriting_processed/handwriting_index_test.json"
+  ]
+}
