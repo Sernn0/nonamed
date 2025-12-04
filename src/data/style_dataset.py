@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("data/handwriting_processed/handwriting_index_train.json"),
         help="Path to index JSON.",
     )
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size.")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size.")
     parser.add_argument(
         "--root",
         type=Path,
@@ -122,11 +122,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     ds = build_style_dataset(args.index, batch_size=args.batch_size, root=args.root)
-    for batch in ds.take(1):
+    for batch in ds.take(2):
         imgs, text_ids, writer_ids = batch
-        print("Image batch shape:", imgs.shape)
-        print("Text IDs shape:", text_ids.shape)
-        print("Writer IDs shape:", writer_ids.shape)
+        print(f"Image batch shape: {imgs.shape}")
+        print(f"Writer IDs shape: {writer_ids.shape}")
+        print(f"Text IDs shape: {text_ids.shape}")
+        print(f"Pixel min/max: {tf.reduce_min(imgs).numpy():.3f} ~ {tf.reduce_max(imgs).numpy():.3f}")
 
 
 if __name__ == "__main__":

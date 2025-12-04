@@ -11,6 +11,24 @@ from typing import Tuple
 import tensorflow as tf
 
 
+class _UnitL2(tf.keras.layers.Layer):
+    """
+    L2 normalize along a given axis. Fallback when UnitNormalization is unavailable.
+    """
+
+    def __init__(self, axis: int = -1, **kwargs):
+        super().__init__(**kwargs)
+        self.axis = axis
+
+    def call(self, inputs: tf.Tensor) -> tf.Tensor:
+        return tf.math.l2_normalize(inputs, axis=self.axis)
+
+    def get_config(self) -> dict:
+        config = super().get_config()
+        config.update({"axis": self.axis})
+        return config
+
+
 def conv_block(x: tf.Tensor, filters: int, kernel_size: int = 3, strides: int = 1) -> tf.Tensor:
     """Conv2D -> BatchNorm -> ReLU block."""
     x = tf.keras.layers.Conv2D(
@@ -57,9 +75,9 @@ def build_style_encoder(
 
     style_vec = tf.keras.layers.Dense(style_dim, name="style_dense")(x)
     if l2_normalize:
-        style_vec = tf.keras.layers.Lambda(
-            lambda t: tf.linalg.l2_normalize(t, axis=-1), name="style_l2_norm"
-        )(style_vec)
+        # Prefer built-in UnitNormalization; fall back to custom layer for older TF.
+        norm_layer = getattr(tf.keras.layers, "UnitNormalization", _UnitL2)
+        style_vec = norm_layer(axis=-1, name="style_l2_norm")(style_vec)
 
     model = tf.keras.Model(inputs=inputs, outputs=style_vec, name="style_encoder")
     return model

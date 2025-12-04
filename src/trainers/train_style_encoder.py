@@ -54,6 +54,18 @@ def parse_args() -> argparse.Namespace:
         default=Path("runs/style_encoder"),
         help="Output directory for models and logs.",
     )
+    parser.add_argument(
+        "--steps_per_epoch",
+        type=int,
+        default=None,
+        help="Optional steps_per_epoch; if None, use full dataset each epoch.",
+    )
+    parser.add_argument(
+        "--validation_steps",
+        type=int,
+        default=None,
+        help="Optional validation_steps; if None, use full validation set each epoch.",
+    )
     return parser.parse_args()
 
 
@@ -149,6 +161,8 @@ def main() -> None:
         train_ds,
         validation_data=val_ds,
         epochs=args.epochs,
+        steps_per_epoch=args.steps_per_epoch,
+        validation_steps=args.validation_steps,
         callbacks=cb_list,
     )
 
