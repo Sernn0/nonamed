@@ -7,3 +7,5 @@ __pycache__
 data/content_font/
 data/handwriting_json/
 data/handwriting_raw/
+
+runs/style_encoder/logs/train
