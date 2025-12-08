@@ -22,14 +22,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import os
+import shutil
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None  # 대용량 PDF 대비 Pillow 경고/차단 해제
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter import PhotoImage
 
 # 프로젝트 루트 기준 기본 경로
 ROOT = Path(__file__).resolve().parents[1]
 CHARSET_SIMPLE = ROOT / "charset_50.txt"
 CHARSET_DETAILED = ROOT / "charset_220.txt"
 OUTPUT_DIR = ROOT / "outputs"
+
+# Drag & Drop 지원 여부
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+
+    HAS_DND = True
+except Exception:
+    HAS_DND = False
+# 색상 팔레트 (디자인 시안과 유사하게 세팅)
+COLOR_BG = "#ffffff"
+COLOR_PANEL = "#e5e5e5"
+COLOR_TEXT = "#111111"
+COLOR_SUB = "#6a6a6a"
+COLOR_BTN_GRAY = "#cfcfcf"
+COLOR_BTN_BLACK = "#000000"
 
 
 # ----------------------- 의존성 체크 ----------------------- #
@@ -41,12 +61,29 @@ def check_dependency(cmd: List[str]) -> bool:
         return False
 
 
+def locate_poppler() -> Optional[str]:
+    # 1) 환경변수
+    env_path = os.environ.get("POPPLER_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
+    # 2) macOS brew 기본 경로들
+    for guess in ("/opt/homebrew/opt/poppler/bin", "/usr/local/opt/poppler/bin"):
+        if Path(guess).exists():
+            return guess
+    # 3) 시스템 PATH 내 pdftoppm
+    which_bin = shutil.which("pdftoppm")
+    if which_bin:
+        return str(Path(which_bin).parent)
+    return None
+
+
 def run_preflight_checks() -> None:
     print("[INFO] Running preflight checks...")
     # Python 패키지
     py_deps = [
         ("Pillow", "PIL"),
         ("numpy", "numpy"),
+        ("pdf2image", "pdf2image"),
         ("fontTools", "fontTools"),
         ("fontmake", "fontmake"),
     ]
@@ -60,6 +97,11 @@ def run_preflight_checks() -> None:
     for tool in ["potrace", "fontmake"]:
         ok = check_dependency([tool, "--version"])
         print(f"[{'OK' if ok else 'WARN'}] {tool} detected" if ok else f"[WARN] {tool} not detected (optional)")
+    poppler_path = locate_poppler()
+    if poppler_path:
+        print(f"[OK] poppler detected at {poppler_path}")
+    else:
+        print("[WARN] poppler not detected. PDF 변환을 위해 설치/경로 설정이 필요합니다.")
     print("[INFO] Preflight checks done.")
 
 
@@ -79,7 +121,7 @@ class AppState:
 # ----------------------- 화면 베이스 ----------------------- #
 class BaseFrame(ttk.Frame):
     def __init__(self, parent, controller):
-        super().__init__(parent)
+        super().__init__(parent, style="Main.TFrame")
         self.controller = controller
 
 
@@ -91,32 +133,81 @@ class MainPage(BaseFrame):
 
     def build_ui(self):
         # 상단 바
-        top = ttk.Frame(self)
-        top.pack(fill="x", pady=10, padx=10)
-        ttk.Label(top, text="Font By Me", font=("Helvetica", 18, "bold")).pack(side="left")
-        ttk.Label(top, text="운여명   황경준   김수인", font=("Helvetica", 11)).pack(side="right")
+        top = ttk.Frame(self, style="Main.TFrame")
+        top.pack(fill="x", pady=(8, 6), padx=10)
+        ttk.Label(top, text="Font By Me", style="Title.TLabel").pack(side="left")
+        ttk.Label(top, text="운여명   황경준   김수인", style="Names.TLabel").pack(side="right")
 
-        body = ttk.Frame(self)
-        body.pack(fill="both", expand=True, padx=40, pady=40)
+        # 좌:우 비율 4:6, 가운데에 여백 확보
+        body = ttk.Frame(self, style="Main.TFrame")
+        body.pack(fill="both", expand=True, padx=(12, 0), pady=(0, 10))
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=3)
+        body.rowconfigure(0, weight=1)
 
-        # 모드 선택
-        mode_frame = ttk.Frame(body)
-        mode_frame.pack(side="left", anchor="n", padx=20)
+        # 왼쪽 영역: 모드 선택
+        left_holder = ttk.Frame(body, style="Main.TFrame")
+        left_holder.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        # 위/아래에 가상 여백을 두어 중앙 정렬 효과
+        left_holder.rowconfigure(0, weight=1)
+        left_holder.rowconfigure(2, weight=1)
+        left_holder.columnconfigure(0, weight=1)
 
-        ttk.Label(mode_frame, text="→ 간편 모드", font=("Helvetica", 12, "bold")).grid(row=0, column=0, sticky="w", pady=5)
-        ttk.Button(mode_frame, text="간편 모드 양식 다운로드", command=lambda: self.download_form("simple")).grid(row=0, column=1, padx=6)
-        ttk.Button(mode_frame, text="간편 모드로 시작", command=lambda: self.start_mode("simple")).grid(row=0, column=2, padx=6)
+        mode_frame = ttk.Frame(left_holder, style="Main.TFrame")
+        mode_frame.grid(row=1, column=0, sticky="n")
+        mode_frame.columnconfigure(0, weight=0)
+        mode_frame.columnconfigure(1, weight=0)
+        btn_width = 14
 
-        ttk.Label(mode_frame, text="→ 정밀 모드", font=("Helvetica", 12, "bold")).grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Button(mode_frame, text="정밀 모드 양식 다운로드", command=lambda: self.download_form("detailed")).grid(row=1, column=1, padx=6)
-        ttk.Button(mode_frame, text="정밀 모드로 시작", command=lambda: self.start_mode("detailed")).grid(row=1, column=2, padx=6)
+        # 간편 모드
+        ttk.Label(mode_frame, text="→ 간편 모드", style="BoldSmall.TLabel").grid(row=0, column=0, sticky="w", pady=(4, 6), padx=(0, 0), columnspan=2)
+        ttk.Button(
+            mode_frame,
+            text="간편 모드 양식 다운로드",
+            style="GraySmall.TButton",
+            width=btn_width,
+            command=lambda: self.download_form("simple"),
+        ).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(2, 10))
+        ttk.Button(
+            mode_frame,
+            text="간편 모드로 시작",
+            style="GraySmall.TButton",
+            width=btn_width,
+            command=lambda: self.start_mode("simple"),
+        ).grid(row=1, column=1, sticky="w", padx=(0, 0), pady=(2, 10))
+
+        # 정밀 모드
+        ttk.Label(mode_frame, text="→ 정밀 모드", style="BoldSmall.TLabel").grid(row=2, column=0, sticky="w", pady=(6, 6), padx=(0, 0), columnspan=2)
+        ttk.Button(
+            mode_frame,
+            text="정밀 모드 양식 다운로드",
+            style="GraySmall.TButton",
+            width=btn_width,
+            command=lambda: self.download_form("detailed"),
+        ).grid(row=3, column=0, sticky="w", padx=(0, 10), pady=(2, 16))
+        ttk.Button(
+            mode_frame,
+            text="정밀 모드로 시작",
+            style="GraySmall.TButton",
+            width=btn_width,
+            command=lambda: self.start_mode("detailed"),
+        ).grid(row=3, column=1, sticky="w", padx=(0, 0), pady=(2, 16))
 
         ttk.Label(
             mode_frame,
-            text="본 앱은 손글씨 PDF를 받아 폰트를 생성합니다.\n모드에 맞는 양식을 다운로드 후 작성한 PDF를 업로드하세요.",
-            font=("Helvetica", 11),
+            text="손글씨 PDF를 받아 폰트를 생성합니다.\n모드에 맞는 양식을 다운로드 후 작성한 PDF를 업로드하세요.",
+            style="BodySmall.TLabel",
             justify="left",
-        ).grid(row=2, column=0, columnspan=3, pady=20, sticky="w")
+        ).grid(row=4, column=0, columnspan=2, pady=(20, 10), sticky="w")
+
+        # 오른쪽 영역: 제공된 이미지를 임베드 (좌/우 1:1 비율로 배치)
+        right_holder = ttk.Frame(body, style="Main.TFrame")
+        right_holder.grid(row=0, column=1, sticky="nsew", padx=(15, 0))
+        right_holder.rowconfigure(0, weight=1)
+        right_holder.columnconfigure(0, weight=1)
+        right = tk.Label(right_holder, bg=COLOR_BG, borderwidth=0, highlightthickness=0, padx=0, pady=0)
+        right.grid(row=0, column=0, sticky="e")
+        self._load_right_image(right)
 
     def download_form(self, mode: str):
         charset = CHARSET_SIMPLE if mode == "simple" else CHARSET_DETAILED
@@ -138,6 +229,37 @@ class MainPage(BaseFrame):
         self.controller.state.mode = mode
         self.controller.show_frame("UploadPage")
 
+    def _load_right_image(self, widget: tk.Label):
+        img_path = ROOT / "assets" / "font_by_me_title.png"
+        if not img_path.exists():
+            # fallback: 작은 캔버스 렌더
+            c = tk.Canvas(widget, width=320, height=240, bg=COLOR_BG, highlightthickness=0)
+            c.pack(fill="both", expand=True)
+            c.create_oval(220, 10, 380, 170, fill="#f4d65c", outline="")
+            for y in [30, 90, 150, 210]:
+                c.create_line(40, y, 240, y, dash=(6, 4), fill="#b0b0b0")
+            c.create_text(140, 80, text="Font", font=("Times New Roman", 42, "bold"), fill="#111111")
+            c.create_text(140, 150, text="By Me", font=("Times New Roman", 42, "bold"), fill="#111111")
+            return
+        # 이미지 로드 및 리사이즈
+        try:
+            from PIL import Image, ImageTk
+
+            img = Image.open(img_path)
+            img = img.resize((380, 320), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            # 우측 끝 정렬
+            widget.configure(image=photo, anchor="e")
+            widget.image = photo
+        except Exception:
+            # Pillow가 없으면 PhotoImage로 시도 (PNG만)
+            try:
+                photo = PhotoImage(file=str(img_path))
+                widget.configure(image=photo)
+                widget.image = photo
+            except Exception:
+                widget.configure(text="이미지 로드 실패", bg=COLOR_BG, fg=COLOR_TEXT)
+
 
 # ----------------------- 업로드 화면 ----------------------- #
 class UploadPage(BaseFrame):
@@ -146,14 +268,51 @@ class UploadPage(BaseFrame):
         self.build_ui()
 
     def build_ui(self):
-        ttk.Label(self, text="이 곳에 파일을 드롭해주세요", font=("Helvetica", 16)).pack(pady=20)
-        drop_area = ttk.Frame(self, padding=40)
-        drop_area.pack(pady=30)
-        drop_area.configure(relief="solid")
-        ttk.Label(drop_area, text="+", font=("Helvetica", 36)).pack()
-        ttk.Label(drop_area, text="PDF 선택", font=("Helvetica", 12)).pack(pady=10)
+        self.configure(style="Main.TFrame")
+        container = tk.Frame(self, bg=COLOR_BG)
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        title_txt = "이 곳에 PDF를 드롭하거나 클릭해서 선택하세요" if HAS_DND else "PDF를 클릭하여 선택하세요"
+        tk.Label(container, text=title_txt, font=("Helvetica", 14, "bold"), bg=COLOR_BG, fg=COLOR_TEXT).pack(pady=10)
+        drop_area = tk.Frame(container, bg=COLOR_PANEL, width=600, height=320)
+        drop_area.pack(pady=10)
+        drop_area.pack_propagate(False)
+        drop_area.configure(highlightthickness=0, bd=0)
+        # 모서리 둥글게: Canvas로 사각형을 그리고 그 위에 컨텐츠 올림
+        canvas = tk.Canvas(drop_area, width=600, height=320, bg=COLOR_BG, highlightthickness=0, bd=0)
+        canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        radius = 30
+        w, h = 600, 320
+        canvas.create_rectangle(radius, 0, w - radius, h, fill=COLOR_PANEL, outline=COLOR_PANEL)
+        canvas.create_rectangle(0, radius, w, h - radius, fill=COLOR_PANEL, outline=COLOR_PANEL)
+        canvas.create_oval(0, 0, radius * 2, radius * 2, fill=COLOR_PANEL, outline=COLOR_PANEL)
+        canvas.create_oval(w - radius * 2, 0, w, radius * 2, fill=COLOR_PANEL, outline=COLOR_PANEL)
+        canvas.create_oval(0, h - radius * 2, radius * 2, h, fill=COLOR_PANEL, outline=COLOR_PANEL)
+        canvas.create_oval(w - radius * 2, h - radius * 2, w, h, fill=COLOR_PANEL, outline=COLOR_PANEL)
+
+        content_holder = tk.Frame(drop_area, bg=COLOR_PANEL)
+        content_holder.place(relx=0.5, rely=0.5, anchor="center")
+        tk.Label(content_holder, text="+", font=("Helvetica", 40), bg=COLOR_PANEL, fg=COLOR_TEXT).pack()
+        tk.Label(content_holder, text="PDF 선택", font=("Helvetica", 12), bg=COLOR_PANEL, fg=COLOR_TEXT).pack(pady=(6, 0))
         drop_area.bind("<Button-1>", lambda e: self.select_file())
-        # 드래그&드롭은 OS별/추가 패키지가 필요하므로 클릭 선택으로 대체
+        if HAS_DND:
+            drop_area.drop_target_register(DND_FILES)
+            drop_area.dnd_bind("<<Drop>>", self._on_drop)
+
+    def _on_drop(self, event):
+        if not event.data:
+            return
+        # tkinterdnd2는 경로가 공백/괄호 포함 시 중괄호로 감싸 전달될 수 있음
+        raw = event.data
+        if raw.startswith("{") and raw.endswith("}"):
+            raw = raw[1:-1]
+        first = raw.split(" ")[0]
+        path = Path(first)
+        if path.suffix.lower() != ".pdf":
+            messagebox.showwarning("알림", "PDF 파일만 지원합니다.")
+            return
+        self.controller.state.pdf_path = path
+        self.controller.start_processing()
 
     def select_file(self):
         path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
@@ -166,10 +325,11 @@ class UploadPage(BaseFrame):
 class LoadingPage(BaseFrame):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        self.progress = ttk.Progressbar(self, mode="indeterminate")
-        self.msg = ttk.Label(self, text="손글씨 인식 중...", font=("Helvetica", 14))
-        self.msg.pack(pady=20)
-        self.progress.pack(fill="x", padx=40)
+        self.configure(style="Main.TFrame")
+        self.progress = ttk.Progressbar(self, mode="indeterminate", length=600)
+        self.msg = ttk.Label(self, text="손글씨 인식 중...", style="Body.TLabel")
+        self.msg.pack(pady=30)
+        self.progress.pack(fill="x", padx=80)
 
     def start(self):
         self.progress.start(10)
@@ -188,13 +348,15 @@ class ResultPage(BaseFrame):
         self.build_ui()
 
     def build_ui(self):
-        ttk.Label(self, text="폰트 다운로드 하기", font=("Helvetica", 16)).pack(pady=20)
+        self.configure(style="Main.TFrame")
+        ttk.Label(self, text="폰트 다운로드 하기", style="Bold.TLabel").pack(pady=30)
         btn_frame = ttk.Frame(self)
         btn_frame.pack(pady=10)
-        self.btn_ttf = ttk.Button(btn_frame, text="ttf 파일", command=self.download_ttf)
-        self.btn_svg = ttk.Button(btn_frame, text="svg 파일", command=self.download_svg)
+        self.btn_ttf = ttk.Button(btn_frame, text="ttf 파일", style="Black.TButton", command=self.download_ttf)
+        self.btn_svg = ttk.Button(btn_frame, text="svg 파일", style="Black.TButton", command=self.download_svg)
         self.btn_ttf.grid(row=0, column=0, padx=10)
         self.btn_svg.grid(row=0, column=1, padx=10)
+        ttk.Button(self, text="종료하기", style="Gray.TButton", command=self.controller.destroy).pack(pady=20)
 
     def download_ttf(self):
         if not self.controller.state.output_ttf:
@@ -216,12 +378,33 @@ class ResultPage(BaseFrame):
 
 
 # ----------------------- 메인 앱 ----------------------- #
-class App(tk.Tk):
+class App(TkinterDnD.Tk if HAS_DND else tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Font By Me")
-        self.geometry("1000x700")
+        self.geometry("700x500")
+        self.configure(bg=COLOR_BG)
         self.state = AppState()
+
+        # 스타일 설정
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("Main.TFrame", background=COLOR_BG)
+        style.configure("Title.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=("Helvetica", 18, "bold"))
+        style.configure("Names.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=("Helvetica", 11))
+        style.configure("Bold.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=("Helvetica", 12, "bold"))
+        style.configure("Body.TLabel", background=COLOR_BG, foreground=COLOR_SUB, font=("Helvetica", 11))
+        style.configure("BoldSmall.TLabel", background=COLOR_BG, foreground=COLOR_TEXT, font=("Helvetica", 11, "bold"))
+        style.configure("BodySmall.TLabel", background=COLOR_BG, foreground=COLOR_SUB, font=("Helvetica", 10))
+        style.configure("Gray.TButton", background=COLOR_BTN_GRAY, foreground=COLOR_TEXT, padding=8, relief="flat", borderwidth=0)
+        style.map("Gray.TButton", background=[("active", "#b8b8b8")])
+        style.configure("GraySmall.TButton", background=COLOR_BTN_GRAY, foreground=COLOR_TEXT, padding=5, relief="flat", borderwidth=0)
+        style.map("GraySmall.TButton", background=[("active", "#b8b8b8")])
+        style.configure("Black.TButton", background=COLOR_BTN_BLACK, foreground="#ffffff", padding=10, relief="flat", borderwidth=0)
+        style.map("Black.TButton", background=[("active", "#222222")])
 
         container = ttk.Frame(self)
         container.pack(fill="both", expand=True)
@@ -288,18 +471,53 @@ class App(tk.Tk):
             raise FileNotFoundError("PDF 파일이 없습니다.")
         tmp_dir = OUTPUT_DIR / "tmp_images"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        # TODO: pdf2image 등으로 실제 변환
-        # 더미: pdf 한 페이지당 빈 PNG 생성
-        out = []
-        out_path = tmp_dir / "page_001.png"
-        from PIL import Image
 
-        Image.new("L", (2048, 2048), 255).save(out_path)
-        out.append(out_path)
-        return out
+        # pdf2image를 사용해 PDF를 이미지로 변환
+        try:
+            from pdf2image import convert_from_path
+        except ImportError as e:
+            raise ImportError("pdf2image가 설치되어 있지 않습니다. `pip install pdf2image` 후 재시도하세요.") from e
+
+        # poppler 경로 자동 추정: 환경변수 POPPLER_PATH 우선, macOS brew 기본 경로 fallback
+        poppler_env = os.environ.get("POPPLER_PATH")
+        poppler_guess = "/opt/homebrew/opt/poppler/bin"
+        poppler_path = poppler_env or (poppler_guess if Path(poppler_guess).exists() else None)
+        poppler_path = poppler_path or locate_poppler()
+
+        try:
+            pages: List[Image.Image] = convert_from_path(
+                str(pdf_path), dpi=dpi, poppler_path=poppler_path
+            )
+        except Exception as e:
+            hint = (
+                "poppler가 필요합니다. macOS: `brew install poppler`, "
+                "Windows: https://github.com/oschwartz10612/poppler-windows/releases 에서 zip 받아 "
+                "bin 경로를 POPPLER_PATH 환경변수로 지정하세요."
+            )
+            raise RuntimeError(f"PDF 처리 실패: {e}\n{hint}") from e
+        if not pages:
+            raise RuntimeError("PDF에서 페이지를 추출하지 못했습니다.")
+
+        out_paths: List[Path] = []
+        for idx, page in enumerate(pages, start=1):
+            gray = page.convert("L")
+            w, h = gray.size
+            # 중앙 2048 정사각형을 잘라내고 256x256으로 축소
+            crop_size = min(2048, w, h)
+            cx, cy = w // 2, h // 2
+            half = crop_size // 2
+            left = cx - half
+            upper = cy - half
+            right = cx + half
+            lower = cy + half
+            cropped = gray.crop((left, upper, right, lower))
+            resized = cropped.resize((256, 256), Image.LANCZOS)
+            out_path = tmp_dir / f"page_{idx:03d}.png"
+            resized.save(out_path)
+            out_paths.append(out_path)
+        return out_paths
 
     def _preprocess_images(self, images: List[Path]) -> List[Path]:
-        # TODO: 실제 크롭(중앙 2048x2048) → 256x256 리사이즈 구현
         return images
 
     def _run_model_stub(self, processed_images: List[Path]) -> List[Path]:
@@ -321,6 +539,12 @@ def main():
     run_preflight_checks()
     OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
     app = App()
+    app.minsize(700, 500)
+    app.maxsize(700, 500)
+    # 처음에만 앞으로 가져와 포커스, 다른 창 포커스 시 강제로 덮지 않음
+    app.after(100, lambda: app.lift())
+    app.after(150, lambda: app.focus_force())
+    app.after(200, lambda: app.attributes("-topmost", False))
     app.mainloop()
 
 
