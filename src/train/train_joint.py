@@ -84,6 +84,12 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Optional MAE weight to mix with MSE.",
     )
+    parser.add_argument(
+        "--output_dir",
+        type=Path,
+        default=Path("runs/joint"),
+        help="Directory to save checkpoints and final models.",
+    )
     return parser.parse_args()
 
 
@@ -223,7 +229,7 @@ def run_training(args: argparse.Namespace) -> None:
         mae_weight=args.mae_weight,
     )
 
-    output_dir = Path("runs/joint")
+    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(args.epochs):
