@@ -2,6 +2,6 @@
 __pycache__
 *DS_store
 
-data
-runs
-outputs
+/data
+/runs
+/outputs
