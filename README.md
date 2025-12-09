@@ -56,5 +56,44 @@ python -m src.train.train_joint \
 5) **UI**
    - `ui/font_ui.py`: 양식 다운로드 → PDF 드롭 → 로딩 → 결과 다운로드. Drag&Drop은 `tkinterdnd2` 설치 시 활성화.
 
+## 설치 가이드
+
+### 1. Python 패키지 설치 (공통)
+```bash
+pip install -r requirements-ui.txt
+```
+
+### 2. 시스템 도구 설치
+
+#### macOS (Homebrew)
+```bash
+# Homebrew 설치 (미설치 시)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 필수 도구 설치
+brew install poppler potrace fontforge
+```
+
+#### Windows
+
+1. **Poppler** (PDF 처리용)
+   - [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases) 다운로드
+   - 압축 해제 후 `bin` 폴더 경로를 환경변수 `POPPLER_PATH`에 추가
+   - 또는 시스템 PATH에 추가
+
+2. **Potrace** (PNG→SVG 변환용)
+   - [potrace 다운로드](https://potrace.sourceforge.net/#downloading)
+   - `potrace.exe`를 시스템 PATH에 추가
+
+3. **FontForge** (SVG→TTF 변환용)
+   - [FontForge 다운로드](https://fontforge.org/en-US/downloads/)
+   - 설치 후 FontForge 설치 경로를 시스템 PATH에 추가
+
+### 3. 실행
+```bash
+python run
+```
+
 ## 기타
-- 필수 의존성: `Pillow`, `numpy`, `pdf2image`, `fonttools`, `fontmake`, `tkinterdnd2`, Poppler(pdf2image용), potrace, fontmake CLI
+- 필수 의존성: `Pillow`, `numpy`, `pdf2image`, `fonttools`, `tensorflow`, `tkinterdnd2`
+- 시스템 도구: Poppler, potrace, FontForge

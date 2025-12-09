@@ -1,6 +1,6 @@
 tkinterdnd2
 fonttools
-fontmake
 Pillow
 numpy
 pdf2image
+tensorflow

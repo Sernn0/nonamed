@@ -37,6 +37,14 @@ CHARSET_SIMPLE = ROOT / "charset_50.txt"
 CHARSET_DETAILED = ROOT / "charset_220.txt"
 OUTPUT_DIR = ROOT / "outputs"
 
+# 파이프라인 모듈 (지연 로딩)
+PIPELINE_AVAILABLE = False
+try:
+    from src.inference.pipeline import run_full_pipeline, finetune_decoder, generate_all_glyphs, create_ttf_font
+    PIPELINE_AVAILABLE = True
+except ImportError:
+    pass
+
 # Drag & Drop (필수 의존성)
 from tkinterdnd2 import DND_FILES, TkinterDnD
 HAS_DND = True
@@ -534,18 +542,91 @@ class App(TkinterDnD.Tk):
         return images
 
     def _run_model_stub(self, processed_images: List[Path]) -> List[Path]:
-        # TODO: content/style 인코더+디코더 추론으로 glyph PNG 생성
-        return processed_images
+        """Fine-tune decoder and generate all glyphs."""
+        if not PIPELINE_AVAILABLE:
+            print("[WARN] Pipeline not available, returning input images")
+            return processed_images
+
+        # Extract characters from processed image filenames (format: 0001_AC00.png)
+        chars = []
+        for img_path in processed_images:
+            # Get hex code from filename
+            name = img_path.stem  # e.g., "0001_AC00"
+            parts = name.split("_")
+            if len(parts) >= 2:
+                try:
+                    codepoint = int(parts[1], 16)
+                    chars.append(chr(codepoint))
+                except ValueError:
+                    continue
+
+        if not chars:
+            print("[WARN] No valid characters extracted from filenames")
+            return processed_images
+
+        work_dir = OUTPUT_DIR / "pipeline_work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine epochs based on mode
+        epochs = 20 if self.state.mode == "simple" else 30
+
+        # Fine-tune decoder
+        decoder_path = finetune_decoder(
+            sample_images=processed_images,
+            chars=chars,
+            output_dir=work_dir,
+            epochs=epochs,
+            batch_size=8,
+        )
+
+        # Generate all glyphs
+        glyph_dir = work_dir / "glyphs"
+        glyph_paths = generate_all_glyphs(decoder_path, glyph_dir)
+
+        return glyph_paths
 
     def _vectorize_and_build_font(self, glyph_pngs: List[Path]) -> tuple[Path, Path]:
-        # TODO: potrace 호출하여 SVG 변환, fontmake 또는 fontTools로 TTF 빌드
-        out_dir = OUTPUT_DIR / "results"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        svg = out_dir / "output.svg"
-        ttf = out_dir / "output.ttf"
-        svg.write_text("<!-- TODO: SVG content -->", encoding="utf-8")
-        ttf.write_bytes(b"")  # placeholder
-        return svg, ttf
+        """Convert PNGs to SVG and build TTF font."""
+        if not PIPELINE_AVAILABLE or not glyph_pngs:
+            # Fallback to placeholder
+            out_dir = OUTPUT_DIR / "results"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            svg = out_dir / "output.svg"
+            ttf = out_dir / "output.ttf"
+            svg.write_text("<!-- No glyphs generated -->", encoding="utf-8")
+            ttf.write_bytes(b"")
+            return svg, ttf
+
+        # Assume glyphs are in pipeline_work/glyphs
+        glyph_dir = glyph_pngs[0].parent if glyph_pngs else OUTPUT_DIR / "pipeline_work" / "glyphs"
+
+        font_name = "MyHandwriting"
+        ttf_path = OUTPUT_DIR / f"{font_name}.ttf"
+
+        success = create_ttf_font(glyph_dir, ttf_path, font_name)
+
+        if success:
+            # Find sample SVG
+            svg_dir = glyph_dir / "svg"
+            svg_files = list(svg_dir.glob("*.svg")) if svg_dir.exists() else []
+            if svg_files:
+                svg_path = OUTPUT_DIR / f"{font_name}_sample.svg"
+                import shutil
+                shutil.copy2(svg_files[0], svg_path)
+            else:
+                svg_path = OUTPUT_DIR / f"{font_name}_sample.svg"
+                svg_path.write_text("<!-- No SVG available -->", encoding="utf-8")
+
+            return svg_path, ttf_path
+        else:
+            # Fallback
+            out_dir = OUTPUT_DIR / "results"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            svg = out_dir / "output.svg"
+            ttf = out_dir / "output.ttf"
+            svg.write_text("<!-- Font generation failed -->", encoding="utf-8")
+            ttf.write_bytes(b"")
+            return svg, ttf
 
 
 def main():
