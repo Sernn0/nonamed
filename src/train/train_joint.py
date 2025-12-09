@@ -85,6 +85,18 @@ def parse_args() -> argparse.Namespace:
         help="Optional MAE weight to mix with MSE.",
     )
     parser.add_argument(
+        "--ssim_weight",
+        type=float,
+        default=0.0,
+        help="SSIM loss weight (structural similarity).",
+    )
+    parser.add_argument(
+        "--edge_weight",
+        type=float,
+        default=0.0,
+        help="Edge loss weight (Sobel edge preservation).",
+    )
+    parser.add_argument(
         "--output_dir",
         type=Path,
         default=Path("runs/joint"),
@@ -127,18 +139,36 @@ def load_decoder(path: Path, content_dim: int, style_dim: int) -> keras.Model:
     return model
 
 
+def ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    """Structural Similarity loss (1 - SSIM)."""
+    return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
+
+
+def edge_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    """Edge preservation loss using Sobel operator."""
+    sobel_true = tf.image.sobel_edges(y_true)
+    sobel_pred = tf.image.sobel_edges(y_pred)
+    return tf.reduce_mean(tf.abs(sobel_true - sobel_pred))
+
+
 def compute_loss(
     images: tf.Tensor,
     preds: tf.Tensor,
     mse_fn: losses.Loss,
     mae_fn: losses.Loss,
     mae_weight: float,
+    ssim_weight: float = 0.0,
+    edge_weight: float = 0.0,
 ) -> tf.Tensor:
-    mse = mse_fn(images, preds)
+    """Combined loss: MSE + weighted(MAE + SSIM + Edge)."""
+    total_loss = mse_fn(images, preds)
     if mae_weight > 0.0:
-        mae = mae_fn(images, preds)
-        return mse + mae_weight * mae
-    return mse
+        total_loss = total_loss + mae_weight * mae_fn(images, preds)
+    if ssim_weight > 0.0:
+        total_loss = total_loss + ssim_weight * ssim_loss(images, preds)
+    if edge_weight > 0.0:
+        total_loss = total_loss + edge_weight * edge_loss(images, preds)
+    return total_loss
 
 
 class Trainer:
@@ -149,6 +179,8 @@ class Trainer:
         decoder: keras.Model,
         learning_rate: float,
         mae_weight: float,
+        ssim_weight: float = 0.0,
+        edge_weight: float = 0.0,
     ):
         self.content_latents = content_latents  # (num_chars, content_dim)
         self.style_encoder = style_encoder
@@ -157,6 +189,8 @@ class Trainer:
         self.mse_fn = losses.MeanSquaredError()
         self.mae_fn = losses.MeanAbsoluteError()
         self.mae_weight = mae_weight
+        self.ssim_weight = ssim_weight
+        self.edge_weight = edge_weight
         self.train_loss = tf.keras.metrics.Mean(name="train_loss")
         self.val_loss = tf.keras.metrics.Mean(name="val_loss")
 
@@ -173,7 +207,10 @@ class Trainer:
         content_vec = tf.gather(self.content_latents, text_ids)
         style_vec = self.style_encoder(images, training=training)
         preds = self.decoder([content_vec, style_vec], training=training)
-        loss = compute_loss(images, preds, self.mse_fn, self.mae_fn, self.mae_weight)
+        loss = compute_loss(
+            images, preds, self.mse_fn, self.mae_fn,
+            self.mae_weight, self.ssim_weight, self.edge_weight
+        )
         return preds, loss, images
 
     @tf.function
@@ -227,6 +264,8 @@ def run_training(args: argparse.Namespace) -> None:
         decoder=decoder,
         learning_rate=args.learning_rate,
         mae_weight=args.mae_weight,
+        ssim_weight=args.ssim_weight,
+        edge_weight=args.edge_weight,
     )
 
     output_dir = Path(args.output_dir)
