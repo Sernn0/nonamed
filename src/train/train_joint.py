@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 from pathlib import Path
 from typing import Tuple, List
 
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -121,7 +119,8 @@ def create_dataset(index_path: Path, content_latents_path: Path, unified_mapping
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
-    return dataset, num_samples
+    steps_per_epoch = num_samples // batch_size
+    return dataset, num_samples, steps_per_epoch
 
 
 def main():
@@ -156,8 +155,13 @@ def main():
     # We *could* transfer weights for the convolutional layers if we want.
     # For now, let's train from scratch or handle weight transfer later if convergence is slow.
 
-    # 3. Training Loop Setup
-    optimizer = keras.optimizers.Adam(learning_rate=args.lr)
+    # 3. Training Loop Setup with Learning Rate Scheduler
+    lr_schedule = keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=args.lr,
+        decay_steps=args.epochs * 1000,  # Will be adjusted
+        alpha=0.01  # Final LR = initial * 0.01
+    )
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=1.0)
 
     # Loss weights
     MSE_WEIGHT = 0.4
@@ -199,9 +203,12 @@ def main():
             # 3. Combined Loss
             loss, _, _, _ = compute_loss(images, preds)
 
-        # Gradients
+        # Gradients with clipping (handled by optimizer.clipnorm)
         trainable_vars = style_encoder.trainable_variables + decoder.trainable_variables
         grads = tape.gradient(loss, trainable_vars)
+
+        # Additional gradient clipping for safety
+        grads, _ = tf.clip_by_global_norm(grads, 5.0)
         optimizer.apply_gradients(zip(grads, trainable_vars))
         return loss
 
@@ -217,11 +224,8 @@ def main():
     print("[INFO] Starting Training...")
 
     # Create tf.data.Dataset (parallel loading)
-    train_dataset, n_train = create_dataset(args.train_index, args.content_latents, unified_mapping, args.batch_size, shuffle=True)
-    val_dataset, n_val = create_dataset(args.val_index, args.content_latents, unified_mapping, args.batch_size, shuffle=False)
-
-    steps_per_epoch = n_train // args.batch_size
-    val_steps = n_val // args.batch_size
+    train_dataset, n_train, steps_per_epoch = create_dataset(args.train_index, args.content_latents, unified_mapping, args.batch_size, shuffle=True)
+    val_dataset, n_val, val_steps = create_dataset(args.val_index, args.content_latents, unified_mapping, args.batch_size, shuffle=False)
 
     best_val_loss = float('inf')
 

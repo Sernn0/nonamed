@@ -9,48 +9,72 @@ import sys
 import os
 
 # Path setup
-ROOT = Path(".").resolve()
-sys.path.append(str(ROOT))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+# Use centralized config
+from src.config import (
+    CONTENT_LATENTS, CHAR_VOCAB, HANDWRITING_RAW,
+    STYLE_ENCODER_BEST, DECODER_BEST, RUNS_DIR
+)
 
 def test_generate():
     print("Loading resources...")
 
-    # Paths (Colab environment assumption)
-    RUNS_DIR = Path("/content/drive/MyDrive/FontByMe/runs")
-    DATA_DIR = ROOT / "data/content_font/NotoSansKR-Regular"
-    LATENTS_PATH = ROOT / "runs/autoenc/content_latents_unified.npy"
-    VOCAB_PATH = ROOT / "src/data/char_vocab.json"
+    # Detect environment (Colab vs Local)
+    IN_COLAB = 'google.colab' in sys.modules
 
-    # Load Models
-    style_enc_path = RUNS_DIR / "style_encoder_best.h5"
-    decoder_path = RUNS_DIR / "decoder_best.h5"
+    if IN_COLAB:
+        # In Colab, check Drive first, then local runs/
+        DRIVE_RUNS = Path("/content/drive/MyDrive/FontByMe/runs")
+        if DRIVE_RUNS.exists():
+            style_enc_path = DRIVE_RUNS / "style_encoder_best.h5"
+            decoder_path = DRIVE_RUNS / "decoder_best.h5"
+            output_dir = DRIVE_RUNS
+        else:
+            style_enc_path = STYLE_ENCODER_BEST
+            decoder_path = DECODER_BEST
+            output_dir = RUNS_DIR
+    else:
+        # Local environment
+        style_enc_path = STYLE_ENCODER_BEST
+        decoder_path = DECODER_BEST
+        output_dir = RUNS_DIR
+
+    print(f"Style Encoder: {style_enc_path}")
+    print(f"Decoder: {decoder_path}")
 
     if not style_enc_path.exists() or not decoder_path.exists():
-        print("❌ Model files not found in Drive!")
+        print(f"❌ Model files not found!")
+        print(f"   Expected: {style_enc_path}")
+        print(f"   Expected: {decoder_path}")
         return
 
     style_encoder = keras.models.load_model(style_enc_path, compile=False)
     decoder = keras.models.load_model(decoder_path, compile=False)
 
-    # Load Latents & Vocab
-    content_latents = np.load(LATENTS_PATH)
-    with open(VOCAB_PATH, "r") as f:
+    # Load Latents & Vocab using config paths
+    content_latents = np.load(CONTENT_LATENTS)
+    with open(CHAR_VOCAB, "r") as f:
         vocab = json.load(f) # char -> idx
 
     # Select test chars
     test_chars = ["가", "나", "다", "빎", "조", "훍", "A", "B"]
 
     # Select a random reference image from data
-    # Just grab any png from resizing dir as 'style'
     from PIL import Image
     import glob
-    style_imgs = glob.glob("data/handwriting_raw/resizing/*/*.jpg")
-    # Try png if jpg not found (depends on user data unzip)
+
+    # Use config path for handwriting data
+    style_pattern = str(HANDWRITING_RAW / "resizing" / "*" / "*.jpg")
+    style_imgs = glob.glob(style_pattern)
     if not style_imgs:
-        style_imgs = glob.glob("data/handwriting_raw/resizing/*/*.png")
+        style_pattern = str(HANDWRITING_RAW / "resizing" / "*" / "*.png")
+        style_imgs = glob.glob(style_pattern)
 
     if not style_imgs:
         print("❌ No style images found to test with.")
+        print(f"   Searched in: {HANDWRITING_RAW / 'resizing'}")
         return
 
     ref_img_path = style_imgs[0]
@@ -103,15 +127,18 @@ def test_generate():
         axes[i+1].axis("off")
 
     plt.tight_layout()
-    plt.savefig("test_result.png")
 
-    # Save to Drive if available
-    if RUNS_DIR.exists():
-        drive_out = RUNS_DIR / "test_result.png"
+    # Save locally first
+    local_out = Path("test_result.png")
+    plt.savefig(local_out)
+    print(f"✅ Saved visualization to {local_out}")
+
+    # Also save to output_dir (Drive in Colab, runs/ locally)
+    if output_dir.exists():
+        drive_out = output_dir / "test_result.png"
         plt.savefig(drive_out)
         print(f"✅ Saved visualization to {drive_out}")
 
-    print("✅ Saved visualization to test_result.png")
     plt.show()
 
 if __name__ == "__main__":
