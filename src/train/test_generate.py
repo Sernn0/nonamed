@@ -65,8 +65,8 @@ def test_generate():
     with open(CHAR_VOCAB, "r") as f:
         vocab = json.load(f) # char -> idx
 
-    # Select test chars
-    test_chars = ["가", "나", "다", "빎", "조", "훍", "A", "B"]
+    # Select test chars (must be in vocab - 2350 Korean syllables only)
+    test_chars = ["가", "나", "다", "라", "마", "한", "글", "자"]
 
     # Select a random reference image from data
     from PIL import Image
