@@ -195,25 +195,30 @@ def main():
 
     @tf.function
     def compute_style_loss(style_vecs, writer_ids):
-        """Compute style consistency loss within batch.
+        """Compute style consistency loss within batch (VECTORIZED).
 
-        For each sample, find other samples with same writer_id,
-        compute MSE between their style vectors.
+        For same-writer pairs, minimize style vector distance.
+        Uses broadcasting for O(n²) operations in parallel on GPU.
         """
+        # Pairwise squared distances: ||s_i - s_j||^2
+        # style_vecs: [B, D], expand for broadcasting
+        diff = tf.expand_dims(style_vecs, 0) - tf.expand_dims(style_vecs, 1)  # [B, B, D]
+        pairwise_dist = tf.reduce_sum(tf.square(diff), axis=-1)  # [B, B]
+
+        # Same-writer mask: 1 if same writer, 0 otherwise
+        writer_ids_row = tf.expand_dims(writer_ids, 0)  # [1, B]
+        writer_ids_col = tf.expand_dims(writer_ids, 1)  # [B, 1]
+        same_writer_mask = tf.cast(tf.equal(writer_ids_row, writer_ids_col), tf.float32)  # [B, B]
+
+        # Upper triangle only (avoid counting pairs twice and self-pairs)
         batch_size = tf.shape(style_vecs)[0]
-        total_loss = 0.0
-        count = 0.0
+        upper_tri = tf.linalg.band_part(tf.ones([batch_size, batch_size]), 0, -1) - tf.eye(batch_size)
+        mask = same_writer_mask * upper_tri  # [B, B]
 
-        for i in tf.range(batch_size):
-            for j in tf.range(i + 1, batch_size):
-                # If same writer, their style vectors should be similar
-                same_writer = tf.cast(writer_ids[i] == writer_ids[j], tf.float32)
-                if same_writer > 0:
-                    diff = tf.reduce_sum(tf.square(style_vecs[i] - style_vecs[j]))
-                    total_loss += diff
-                    count += 1.0
+        # Weighted sum of distances for same-writer pairs
+        total_loss = tf.reduce_sum(pairwise_dist * mask)
+        count = tf.reduce_sum(mask)
 
-        # Avoid division by zero
         return total_loss / tf.maximum(count, 1.0)
 
     @tf.function
