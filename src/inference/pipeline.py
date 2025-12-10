@@ -37,16 +37,52 @@ def load_char_vocab() -> dict:
         return json.load(f)
 
 
-def load_image(path: Path, size: int = 256) -> np.ndarray:
+def load_image(path: Path, size: int = 256, blur_sigma: float = 0.0) -> np.ndarray:
     """Load and preprocess image.
 
     Args:
         path: Image file path
         size: Target size
+        blur_sigma: Gaussian blur sigma (0 = no blur). Use ~1.0 for PDF images.
+    """
+    from PIL import ImageFilter
+
+    img = Image.open(path).convert("L")
+    img = img.resize((size, size), Image.LANCZOS)
+
+    # Apply Gaussian blur if specified (to match training data domain)
+    if blur_sigma > 0:
+        img = img.filter(ImageFilter.GaussianBlur(radius=blur_sigma))
+
+    arr = np.array(img, dtype=np.float32) / 255.0
+    return np.expand_dims(arr, axis=-1)
+
+
+def load_image_with_domain_adaptation(path: Path, size: int = 256) -> np.ndarray:
+    """Load PDF image and convert to training domain using histogram matching.
+
+    Key differences found:
+    - PDF: 5% pure black, 92% pure white (binary-like)
+    - Training: 0% pure black, 84% white (more gradients)
+
+    Solution: Remove extreme values and compress toward training distribution.
     """
     img = Image.open(path).convert("L")
     img = img.resize((size, size), Image.LANCZOS)
     arr = np.array(img, dtype=np.float32) / 255.0
+
+    # 1. Remove pure black (PDF has 5% black at 0, training has almost none)
+    # Map [0, 1] to [0.15, 1] - darkest pixel becomes 15% gray
+    arr = arr * 0.85 + 0.15
+
+    # 2. Reduce the "purity" of white (Training has more mid-tones)
+    # Add slight variation based on position to break uniformity
+    # This simulates paper texture in training images
+    h, w = arr.shape
+    texture = np.random.normal(0, 0.02, (h, w)).astype(np.float32)
+    arr = arr + texture
+
+    arr = np.clip(arr, 0, 1)
     return np.expand_dims(arr, axis=-1)
 
 
@@ -197,12 +233,16 @@ def generate_all_glyphs(
         compile=False
     )
 
-    # Extract style vector from user samples (average of all samples)
-    print(f"[Pipeline] Extracting style from {len(style_images)} samples...")
+    # Use first 5 samples for style extraction (too many dilutes style)
+    max_style_samples = 5
+    samples_to_use = style_images[:max_style_samples]
+
+    print(f"[Pipeline] Extracting style from {len(samples_to_use)} samples (of {len(style_images)} total)...")
     style_vecs = []
-    for img_path in style_images:
+    for img_path in samples_to_use:
         if not img_path.exists():
             continue
+        # Use raw load_image for now (testing photographed handwriting)
         img = load_image(img_path)
         img_batch = np.expand_dims(img, 0)
         style_vec = style_encoder(img_batch, training=False).numpy()
@@ -211,7 +251,7 @@ def generate_all_glyphs(
     if not style_vecs:
         raise ValueError("No valid style images provided")
 
-    # Average style vector
+    # Average style vector (from limited samples)
     avg_style = np.mean(np.concatenate(style_vecs, axis=0), axis=0, keepdims=True)
     print(f"[Pipeline] Style vector shape: {avg_style.shape}")
 
@@ -249,15 +289,8 @@ def generate_all_glyphs(
             char = korean_chars[char_idx]
             codepoint = ord(char)
 
-            # Contrast enhancement: model output is too faint (mean ~0.93)
-            # Invert (so glyph is high value), multiply, clip, invert back
-            arr = pred.squeeze()
-            arr = 1.0 - arr  # Invert: background=0, glyph=high
-            arr = arr * 4.0  # Amplify contrast 4x
-            arr = np.clip(arr, 0, 1)
-            arr = 1.0 - arr  # Invert back: background=white, glyph=dark
-
-            img = (arr * 255).astype(np.uint8)
+            # Use raw model output (new 25-epoch model produces good results)
+            img = (pred.squeeze() * 255).astype(np.uint8)
             pil_img = Image.fromarray(img, mode="L")
             out_path = output_dir / f"U+{codepoint:04X}.png"
             pil_img.save(out_path)
