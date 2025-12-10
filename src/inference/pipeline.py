@@ -249,7 +249,15 @@ def generate_all_glyphs(
             char = korean_chars[char_idx]
             codepoint = ord(char)
 
-            img = (pred.squeeze() * 255).astype(np.uint8)
+            # Contrast enhancement: model output is too faint (mean ~0.93)
+            # Invert (so glyph is high value), multiply, clip, invert back
+            arr = pred.squeeze()
+            arr = 1.0 - arr  # Invert: background=0, glyph=high
+            arr = arr * 4.0  # Amplify contrast 4x
+            arr = np.clip(arr, 0, 1)
+            arr = 1.0 - arr  # Invert back: background=white, glyph=dark
+
+            img = (arr * 255).astype(np.uint8)
             pil_img = Image.fromarray(img, mode="L")
             out_path = output_dir / f"U+{codepoint:04X}.png"
             pil_img.save(out_path)

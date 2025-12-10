@@ -37,13 +37,18 @@ CHARSET_SIMPLE = ROOT / "charset_50.txt"
 CHARSET_DETAILED = ROOT / "charset_220.txt"
 OUTPUT_DIR = ROOT / "outputs"
 
+# 프로젝트 루트를 sys.path에 추가 (src 모듈 import를 위해)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 # 파이프라인 모듈 (지연 로딩)
 PIPELINE_AVAILABLE = False
 try:
     from src.inference.pipeline import run_full_pipeline, finetune_decoder, generate_all_glyphs, create_ttf_font
     PIPELINE_AVAILABLE = True
-except ImportError:
-    pass
+    print("[UI] Pipeline loaded successfully!")
+except ImportError as e:
+    print(f"[UI] Pipeline import failed: {e}")
 
 # Drag & Drop (필수 의존성)
 from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -543,6 +548,9 @@ class App(TkinterDnD.Tk):
 
     def _run_model_stub(self, processed_images: List[Path]) -> List[Path]:
         """Fine-tune decoder and generate all glyphs."""
+        print(f"[UI] _run_model_stub called with {len(processed_images)} images")
+        print(f"[UI] PIPELINE_AVAILABLE = {PIPELINE_AVAILABLE}")
+
         if not PIPELINE_AVAILABLE:
             print("[WARN] Pipeline not available, returning input images")
             return processed_images
@@ -568,11 +576,19 @@ class App(TkinterDnD.Tk):
         work_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate all glyphs using user's style (no fine-tuning needed!)
+        print(f"[UI] Calling generate_all_glyphs with {len(processed_images)} style images")
         glyph_dir = work_dir / "glyphs"
-        glyph_paths = generate_all_glyphs(
-            style_images=processed_images,
-            output_dir=glyph_dir,
-        )
+        try:
+            glyph_paths = generate_all_glyphs(
+                style_images=processed_images,
+                output_dir=glyph_dir,
+            )
+            print(f"[UI] Generated {len(glyph_paths)} glyphs")
+        except Exception as e:
+            print(f"[UI] generate_all_glyphs error: {e}")
+            import traceback
+            traceback.print_exc()
+            return processed_images
 
         return glyph_paths
 

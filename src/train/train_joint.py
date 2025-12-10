@@ -75,9 +75,10 @@ def create_dataset(index_path: Path, content_latents_path: Path, unified_mapping
 
     content_latents = np.load(content_latents_path)
 
-    # Filter valid entries and prepare paths/indices
+    # Filter valid entries and prepare paths/indices/writer_ids
     image_paths = []
     content_indices = []
+    writer_ids = []
 
     for e in data:
         char = e.get('text')
@@ -87,6 +88,10 @@ def create_dataset(index_path: Path, content_latents_path: Path, unified_mapping
             if p.exists():
                 image_paths.append(str(p))
                 content_indices.append(idx)
+                # Extract writer_id from path like 'data/handwriting_raw/resizing/104/...'
+                parts = e['image_path'].split('/')
+                writer_id = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 0
+                writer_ids.append(writer_id)
 
     num_samples = len(image_paths)
     print(f"[DATA] Valid samples: {num_samples}")
@@ -94,10 +99,11 @@ def create_dataset(index_path: Path, content_latents_path: Path, unified_mapping
     # Convert to numpy arrays
     image_paths = np.array(image_paths)
     content_indices = np.array(content_indices, dtype=np.int32)
+    writer_ids = np.array(writer_ids, dtype=np.int32)
     content_latents_tensor = tf.constant(content_latents, dtype=tf.float32)
 
     # TF image loading function
-    def load_and_preprocess(path, c_idx):
+    def load_and_preprocess(path, c_idx, w_id):
         # Read file
         raw = tf.io.read_file(path)
         img = tf.image.decode_image(raw, channels=1, expand_animations=False)
@@ -107,10 +113,10 @@ def create_dataset(index_path: Path, content_latents_path: Path, unified_mapping
         # Get content latent
         c_vec = tf.gather(content_latents_tensor, c_idx)
 
-        return img, c_vec
+        return img, c_vec, w_id
 
     # Create dataset
-    dataset = tf.data.Dataset.from_tensor_slices((image_paths, content_indices))
+    dataset = tf.data.Dataset.from_tensor_slices((image_paths, content_indices, writer_ids))
 
     if shuffle:
         dataset = dataset.shuffle(buffer_size=min(10000, num_samples))
@@ -184,8 +190,34 @@ def main():
         loss = MSE_WEIGHT * mse + L1_WEIGHT * l1 + SSIM_WEIGHT * ssim_loss
         return loss, mse, l1, ssim_loss
 
+    # Style Consistency Loss: same writer -> similar style vectors
+    STYLE_WEIGHT = 0.3  # Weight for style consistency loss
+
     @tf.function
-    def train_step(images, content_vecs):
+    def compute_style_loss(style_vecs, writer_ids):
+        """Compute style consistency loss within batch.
+
+        For each sample, find other samples with same writer_id,
+        compute MSE between their style vectors.
+        """
+        batch_size = tf.shape(style_vecs)[0]
+        total_loss = 0.0
+        count = 0.0
+
+        for i in tf.range(batch_size):
+            for j in tf.range(i + 1, batch_size):
+                # If same writer, their style vectors should be similar
+                same_writer = tf.cast(writer_ids[i] == writer_ids[j], tf.float32)
+                if same_writer > 0:
+                    diff = tf.reduce_sum(tf.square(style_vecs[i] - style_vecs[j]))
+                    total_loss += diff
+                    count += 1.0
+
+        # Avoid division by zero
+        return total_loss / tf.maximum(count, 1.0)
+
+    @tf.function
+    def train_step(images, content_vecs, writer_ids):
         with tf.GradientTape() as tape:
             # 1. Encode Style
             style_vecs = style_encoder(images, training=True)
@@ -193,8 +225,14 @@ def main():
             # 2. Decode (Content + Style)
             preds = decoder([content_vecs, style_vecs], training=True)
 
-            # 3. Combined Loss
-            loss, _, _, _ = compute_loss(images, preds)
+            # 3. Reconstruction Loss
+            recon_loss, _, _, _ = compute_loss(images, preds)
+
+            # 4. Style Consistency Loss (same writer -> similar style)
+            style_loss = compute_style_loss(style_vecs, writer_ids)
+
+            # 5. Total Loss
+            loss = recon_loss + STYLE_WEIGHT * style_loss
 
         # Gradients with clipping (handled by optimizer.clipnorm)
         trainable_vars = style_encoder.trainable_variables + decoder.trainable_variables
@@ -206,11 +244,13 @@ def main():
         return loss
 
     @tf.function
-    def val_step(images, content_vecs):
+    def val_step(images, content_vecs, writer_ids):
         style_vecs = style_encoder(images, training=False)
         preds = decoder([content_vecs, style_vecs], training=False)
 
-        loss, _, _, _ = compute_loss(images, preds)
+        recon_loss, _, _, _ = compute_loss(images, preds)
+        style_loss = compute_style_loss(style_vecs, writer_ids)
+        loss = recon_loss + STYLE_WEIGHT * style_loss
         return loss
 
     # 5. Run Training
@@ -238,8 +278,8 @@ def main():
         # Train
         train_loss_sum = 0
         step = 0
-        for images, content_vecs in train_dataset:
-            loss = train_step(images, content_vecs)
+        for images, content_vecs, writer_ids in train_dataset:
+            loss = train_step(images, content_vecs, writer_ids)
             train_loss_sum += loss
             step += 1
             if step % 100 == 0:
@@ -251,8 +291,8 @@ def main():
         # Val
         val_loss_sum = 0
         val_step_count = 0
-        for images, content_vecs in val_dataset:
-            loss = val_step(images, content_vecs)
+        for images, content_vecs, writer_ids in val_dataset:
+            loss = val_step(images, content_vecs, writer_ids)
             val_loss_sum += loss
             val_step_count += 1
 
