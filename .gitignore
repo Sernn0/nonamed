@@ -3,5 +3,6 @@ __pycache__
 *DS_store
 
 /data/handwriting_raw
-/runs
+/runs/autoenc
+/runs/style_encoder
 /outputs
