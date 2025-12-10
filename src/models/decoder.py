@@ -29,20 +29,30 @@ def build_decoder(
     x = tf.keras.layers.Concatenate(name="concat_latent")([scaled_content, style_input])
 
     # Project to 16x16x256 feature map (same as content autoencoder decoder)
-    x = tf.keras.layers.Dense(16 * 16 * 256, activation="relu")(x)
+    x = tf.keras.layers.Dense(16 * 16 * 256, use_bias=False)(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.Reshape((16, 16, 256))(x)
 
-    # Decoder blocks: Conv2DTranspose + UpSampling2D (proven to work)
-    x = tf.keras.layers.Conv2DTranspose(256, 3, padding="same", activation="relu")(x)
+    # Decoder blocks: Conv2DTranspose + BatchNorm + ReLU + UpSampling2D
+    x = tf.keras.layers.Conv2DTranspose(256, 3, padding="same", use_bias=False)(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.UpSampling2D(2)(x)  # 32x32
 
-    x = tf.keras.layers.Conv2DTranspose(128, 3, padding="same", activation="relu")(x)
+    x = tf.keras.layers.Conv2DTranspose(128, 3, padding="same", use_bias=False)(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.UpSampling2D(2)(x)  # 64x64
 
-    x = tf.keras.layers.Conv2DTranspose(64, 3, padding="same", activation="relu")(x)
+    x = tf.keras.layers.Conv2DTranspose(64, 3, padding="same", use_bias=False)(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.UpSampling2D(2)(x)  # 128x128
 
-    x = tf.keras.layers.Conv2DTranspose(32, 3, padding="same", activation="relu")(x)
+    x = tf.keras.layers.Conv2DTranspose(32, 3, padding="same", use_bias=False)(x)
+    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.UpSampling2D(2)(x)  # 256x256
 
     output = tf.keras.layers.Conv2D(

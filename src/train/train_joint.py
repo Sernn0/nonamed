@@ -65,69 +65,63 @@ def load_image(path: Path) -> np.ndarray:
     return np.expand_dims(arr, axis=-1)
 
 
-def data_generator(index_path: Path, content_latents_path: Path, unified_mapping: dict, batch_size: int):
+def create_dataset(index_path: Path, content_latents_path: Path, unified_mapping: dict, batch_size: int, shuffle: bool = True):
     """
-    Generator that yields ( [content_vec, image], target_image ) pairs?
-    No, for Joint Training:
-    Input: [Content Latent, Style Vector] (Style Vector comes from Style Encoder(Reference Image))
+    Create a tf.data.Dataset for efficient parallel data loading.
 
-    Training Loop Strategy:
-    1. Sample a batch of (Image, Character) pairs.
-    2. Get Content Latent for Character (from lookup).
-    3. Pass Image to Style Encoder -> Style Vector.
-    4. Pass [Content Latent, Style Vector] to Decoder -> Pred Image.
-    5. Loss = MSE(Image, Pred Image).
-
-    Wait, if we train Style Encoder simultaneously, this works.
+    Returns:
+        (dataset, num_samples): TF Dataset and total sample count
     """
     with open(index_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     content_latents = np.load(content_latents_path)
 
-    # Filter valid entries
-    valid_data = []
+    # Filter valid entries and prepare paths/indices
+    image_paths = []
+    content_indices = []
+
     for e in data:
         char = e.get('text')
         idx = unified_mapping.get(char)
         if idx is not None and idx < len(content_latents):
-            e['_unified_idx'] = idx
-            valid_data.append(e)
+            p = ROOT / e['image_path']
+            if p.exists():
+                image_paths.append(str(p))
+                content_indices.append(idx)
 
-    num_samples = len(valid_data)
-    indices = np.arange(num_samples)
+    num_samples = len(image_paths)
+    print(f"[DATA] Valid samples: {num_samples}")
 
-    while True:
-        np.random.shuffle(indices)
-        for i in range(0, num_samples, batch_size):
-            batch_idx = indices[i : i + batch_size]
-            batch_entries = [valid_data[k] for k in batch_idx]
+    # Convert to numpy arrays
+    image_paths = np.array(image_paths)
+    content_indices = np.array(content_indices, dtype=np.int32)
+    content_latents_tensor = tf.constant(content_latents, dtype=tf.float32)
 
-            # Prepare batch
-            images = []
-            c_latents = []
+    # TF image loading function
+    def load_and_preprocess(path, c_idx):
+        # Read file
+        raw = tf.io.read_file(path)
+        img = tf.image.decode_image(raw, channels=1, expand_animations=False)
+        img = tf.image.resize(img, [256, 256])
+        img = tf.cast(img, tf.float32) / 255.0
 
-            for entry in batch_entries:
-                # Load image
-                # Logic to find absolute path
-                # index json usually has relative path from project root or data root
-                # "image_path": "data/handwriting_raw/..."
-                p = ROOT / entry['image_path']
-                if not p.exists():
-                    # Fallback or skip?
-                    # For generator safety, maybe output zero/skip?
-                    # Ideally data cleaning removed these.
-                    img = np.zeros((256, 256, 1), dtype=np.float32)
-                else:
-                    img = load_image(p)
+        # Get content latent
+        c_vec = tf.gather(content_latents_tensor, c_idx)
 
-                images.append(img)
-                c_latents.append(content_latents[entry['_unified_idx']])
+        return img, c_vec
 
-            batch_images = np.array(images)      # (B, 256, 256, 1)
-            batch_content = np.array(c_latents)  # (B, 64)
+    # Create dataset
+    dataset = tf.data.Dataset.from_tensor_slices((image_paths, content_indices))
 
-            yield batch_images, batch_content
+    if shuffle:
+        dataset = dataset.shuffle(buffer_size=min(10000, num_samples))
+
+    dataset = dataset.map(load_and_preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
+    return dataset, num_samples
 
 
 def main():
@@ -164,9 +158,35 @@ def main():
 
     # 3. Training Loop Setup
     optimizer = keras.optimizers.Adam(learning_rate=args.lr)
-    mse_loss = keras.losses.MeanSquaredError()
 
-    # 4. Custom Training Step with Weighted Loss
+    # Loss weights
+    MSE_WEIGHT = 0.4
+    L1_WEIGHT = 0.4
+    SSIM_WEIGHT = 0.2
+    GLYPH_WEIGHT = 20.0  # Extra weight for dark pixels (glyphs)
+
+    # 4. Custom Training Step with Combined Loss
+    @tf.function
+    def compute_loss(images, preds):
+        """Combined Weighted MSE + L1 + SSIM loss."""
+        # Pixel weights: emphasize glyph (dark) pixels
+        weights = 1.0 + (1.0 - images) * GLYPH_WEIGHT
+
+        # Weighted MSE
+        mse = tf.reduce_mean(weights * tf.square(images - preds))
+
+        # Weighted L1 (MAE) for sharper edges
+        l1 = tf.reduce_mean(weights * tf.abs(images - preds))
+
+        # SSIM (Structural Similarity) for perceptual quality
+        # SSIM returns values in [-1, 1], we want loss so use 1 - ssim
+        ssim_val = tf.reduce_mean(tf.image.ssim(images, preds, max_val=1.0))
+        ssim_loss = 1.0 - ssim_val
+
+        # Combined loss
+        loss = MSE_WEIGHT * mse + L1_WEIGHT * l1 + SSIM_WEIGHT * ssim_loss
+        return loss, mse, l1, ssim_loss
+
     @tf.function
     def train_step(images, content_vecs):
         with tf.GradientTape() as tape:
@@ -176,14 +196,8 @@ def main():
             # 2. Decode (Content + Style)
             preds = decoder([content_vecs, style_vecs], training=True)
 
-            # 3. Weighted Loss
-            # images: 0=black(glyph), 1=white(ckpt)
-            # We want to penalize errors on black pixels (glyph) more.
-            # Weight = 1 + (1 - target) * 20  -> White pixel weight=1, Black pixel weight=21
-            weights = 1.0 + (1.0 - images) * 20.0
-
-            mse = tf.square(images - preds)
-            loss = tf.reduce_mean(weights * mse)
+            # 3. Combined Loss
+            loss, _, _, _ = compute_loss(images, preds)
 
         # Gradients
         trainable_vars = style_encoder.trainable_variables + decoder.trainable_variables
@@ -196,22 +210,16 @@ def main():
         style_vecs = style_encoder(images, training=False)
         preds = decoder([content_vecs, style_vecs], training=False)
 
-        # Consistent weighted loss for validation
-        weights = 1.0 + (1.0 - images) * 20.0
-        mse = tf.square(images - preds)
-        loss = tf.reduce_mean(weights * mse)
+        loss, _, _, _ = compute_loss(images, preds)
         return loss
 
     # 5. Run Training
     print("[INFO] Starting Training...")
 
-    # Generators
-    train_gen = data_generator(args.train_index, args.content_latents, unified_mapping, args.batch_size)
-    val_gen = data_generator(args.val_index, args.content_latents, unified_mapping, args.batch_size)
+    # Create tf.data.Dataset (parallel loading)
+    train_dataset, n_train = create_dataset(args.train_index, args.content_latents, unified_mapping, args.batch_size, shuffle=True)
+    val_dataset, n_val = create_dataset(args.val_index, args.content_latents, unified_mapping, args.batch_size, shuffle=False)
 
-    # Quick count for steps
-    with open(args.train_index) as f: n_train = len(json.load(f))
-    with open(args.val_index) as f: n_val = len(json.load(f))
     steps_per_epoch = n_train // args.batch_size
     val_steps = n_val // args.batch_size
 
@@ -222,24 +230,26 @@ def main():
 
         # Train
         train_loss_sum = 0
-        for step in range(steps_per_epoch):
-            images, content_vecs = next(train_gen)
+        step = 0
+        for images, content_vecs in train_dataset:
             loss = train_step(images, content_vecs)
             train_loss_sum += loss
+            step += 1
             if step % 100 == 0:
                 print(f"  Step {step}/{steps_per_epoch} Loss: {loss:.4f}", end='\r')
 
-        avg_train_loss = train_loss_sum / steps_per_epoch
+        avg_train_loss = train_loss_sum / max(step, 1)
         print(f"  Train Loss: {avg_train_loss:.4f}")
 
         # Val
         val_loss_sum = 0
-        for step in range(val_steps):
-            images, content_vecs = next(val_gen)
+        val_step_count = 0
+        for images, content_vecs in val_dataset:
             loss = val_step(images, content_vecs)
             val_loss_sum += loss
+            val_step_count += 1
 
-        avg_val_loss = val_loss_sum / val_steps
+        avg_val_loss = val_loss_sum / max(val_step_count, 1)
         print(f"  Val Loss:   {avg_val_loss:.4f}")
 
         # Checkpoint

@@ -560,28 +560,19 @@ class App(TkinterDnD.Tk):
                 except ValueError:
                     continue
 
-        if not chars:
-            print("[WARN] No valid characters extracted from filenames")
+        if not processed_images:
+            print("[WARN] No valid images for style extraction")
             return processed_images
 
         work_dir = OUTPUT_DIR / "pipeline_work"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        # Determine epochs based on mode
-        epochs = 20 if self.state.mode == "simple" else 30
-
-        # Fine-tune decoder
-        decoder_path = finetune_decoder(
-            sample_images=processed_images,
-            chars=chars,
-            output_dir=work_dir,
-            epochs=epochs,
-            batch_size=8,
-        )
-
-        # Generate all glyphs
+        # Generate all glyphs using user's style (no fine-tuning needed!)
         glyph_dir = work_dir / "glyphs"
-        glyph_paths = generate_all_glyphs(decoder_path, glyph_dir)
+        glyph_paths = generate_all_glyphs(
+            style_images=processed_images,
+            output_dir=glyph_dir,
+        )
 
         return glyph_paths
 

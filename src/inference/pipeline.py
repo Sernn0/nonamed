@@ -1,6 +1,8 @@
 """
 Pipeline module for FontByMe UI integration.
-Handles: PDF -> Fine-tune -> Generate All Chars -> TTF/SVG
+Handles: User Samples -> Style Encoding -> Generate All Chars -> TTF/SVG
+
+Updated to use Joint Decoder (Content + Style) architecture.
 """
 
 from __future__ import annotations
@@ -15,13 +17,16 @@ from PIL import Image
 
 import json
 
-# Paths relative to project root
-ROOT = Path(__file__).resolve().parents[2]
+# Use centralized config
+from src.config import (
+    ROOT, DATA_DIR, CONTENT_LATENTS, CHAR_VOCAB, OUTPUT_DIR,
+    STYLE_ENCODER_BEST, DECODER_BEST, CONTENT_DIM, STYLE_DIM, IMAGE_SIZE
+)
+
+# Legacy paths for backward compatibility
 PRETRAINED_DECODER = ROOT / "runs" / "autoenc" / "decoder.h5"
-CONTENT_LATENTS = ROOT / "runs" / "autoenc" / "content_latents_unified.npy"
 PNG_DIR = ROOT / "data" / "content_font" / "NotoSansKR-Regular"
-CHAR_VOCAB = ROOT / "src" / "data" / "char_vocab.json"
-OUTPUT_DIR = ROOT / "outputs"
+
 
 
 def load_char_vocab() -> dict:
@@ -140,16 +145,23 @@ def finetune_decoder(
 
 
 def generate_all_glyphs(
-    decoder_path: Optional[Path],
+    style_images: List[Path],
     output_dir: Path,
+    style_encoder_path: Optional[Path] = None,
+    decoder_path: Optional[Path] = None,
     batch_size: int = 32,
 ) -> List[Path]:
-    """Generate all 2356 Korean glyphs using decoder.
+    """Generate all 2356 Korean glyphs using Joint Decoder with user's style.
 
     Args:
-        decoder_path: Path to decoder. If None, uses pretrained decoder.
+        style_images: List of user's handwriting sample images for style extraction
         output_dir: Output directory for generated PNGs
+        style_encoder_path: Path to style encoder model
+        decoder_path: Path to joint decoder model
         batch_size: Batch size for generation
+
+    Returns:
+        List of paths to generated glyph PNGs
     """
     import tensorflow as tf
     from tensorflow import keras
@@ -159,12 +171,42 @@ def generate_all_glyphs(
     char_to_index = load_char_vocab()
     content_latents = np.load(CONTENT_LATENTS)
 
-    # Use pretrained decoder if no fine-tuned path provided
+    # Load models
+    if style_encoder_path is None or not style_encoder_path.exists():
+        style_encoder_path = STYLE_ENCODER_BEST
     if decoder_path is None or not decoder_path.exists():
-        decoder_path = PRETRAINED_DECODER
-        print("[Pipeline] Using pretrained decoder")
+        decoder_path = DECODER_BEST
 
-    decoder = keras.models.load_model(str(decoder_path), compile=False, safe_mode=False)
+    if not style_encoder_path.exists() or not decoder_path.exists():
+        raise FileNotFoundError(
+            f"Joint models not found. Train with train_joint.py first.\n"
+            f"  Style Encoder: {style_encoder_path}\n"
+            f"  Decoder: {decoder_path}"
+        )
+
+    print(f"[Pipeline] Loading Style Encoder from {style_encoder_path}")
+    style_encoder = keras.models.load_model(str(style_encoder_path), compile=False)
+
+    print(f"[Pipeline] Loading Decoder from {decoder_path}")
+    decoder = keras.models.load_model(str(decoder_path), compile=False)
+
+    # Extract style vector from user samples (average of all samples)
+    print(f"[Pipeline] Extracting style from {len(style_images)} samples...")
+    style_vecs = []
+    for img_path in style_images:
+        if not img_path.exists():
+            continue
+        img = load_image(img_path)
+        img_batch = np.expand_dims(img, 0)
+        style_vec = style_encoder(img_batch, training=False).numpy()
+        style_vecs.append(style_vec)
+
+    if not style_vecs:
+        raise ValueError("No valid style images provided")
+
+    # Average style vector
+    avg_style = np.mean(np.concatenate(style_vecs, axis=0), axis=0, keepdims=True)
+    print(f"[Pipeline] Style vector shape: {avg_style.shape}")
 
     # Get all Korean syllables
     korean_chars = []
@@ -185,8 +227,14 @@ def generate_all_glyphs(
 
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
-        batch_latents = tf.constant(all_latents[start:end])
-        batch_preds = decoder(batch_latents, training=False).numpy()
+        batch_latents = tf.constant(all_latents[start:end], dtype=tf.float32)
+
+        # Repeat style vector for batch
+        batch_size_actual = end - start
+        batch_style = tf.constant(np.tile(avg_style, (batch_size_actual, 1)), dtype=tf.float32)
+
+        # Generate with Joint Decoder
+        batch_preds = decoder([batch_latents, batch_style], training=False).numpy()
         batch_preds = np.clip(batch_preds, 0, 1)
 
         for i, pred in enumerate(batch_preds):
@@ -194,7 +242,6 @@ def generate_all_glyphs(
             char = korean_chars[char_idx]
             codepoint = ord(char)
 
-            # Decoder outputs black glyph on white bg (same as training data)
             img = (pred.squeeze() * 255).astype(np.uint8)
             pil_img = Image.fromarray(img, mode="L")
             out_path = output_dir / f"U+{codepoint:04X}.png"
@@ -323,17 +370,15 @@ print(f"Generated font with {{len(font)}} glyphs")
 
 def run_full_pipeline(
     sample_images: List[Path],
-    chars: List[str],
     font_name: str = "MyHandwriting",
-    epochs: int = 30,
 ) -> Tuple[Optional[Path], Optional[Path]]:
-    """Run complete pipeline: Fine-tune -> Generate -> TTF/SVG.
+    """Run complete pipeline: Style Extract -> Generate All Glyphs -> TTF/SVG.
+
+    Uses pre-trained Joint Decoder + Style Encoder. No fine-tuning needed.
 
     Args:
-        sample_images: User's handwriting PNG files
-        chars: Corresponding characters
+        sample_images: User's handwriting PNG files (for style extraction)
         font_name: Name for the generated font
-        epochs: Training epochs
 
     Returns:
         Tuple of (svg_path, ttf_path)
@@ -341,21 +386,16 @@ def run_full_pipeline(
     work_dir = OUTPUT_DIR / "pipeline_work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Fine-tune decoder
-    print("[Pipeline] Step 1: Fine-tuning decoder...")
-    decoder_path = finetune_decoder(
-        sample_images, chars,
-        output_dir=work_dir,
-        epochs=epochs
+    # Step 1: Generate all glyphs using user's style
+    print("[Pipeline] Step 1: Generating all characters with user style...")
+    glyph_dir = work_dir / "glyphs"
+    generate_all_glyphs(
+        style_images=sample_images,
+        output_dir=glyph_dir,
     )
 
-    # Step 2: Generate all glyphs
-    print("[Pipeline] Step 2: Generating all characters...")
-    glyph_dir = work_dir / "glyphs"
-    generate_all_glyphs(decoder_path, glyph_dir)
-
-    # Step 3: Create font
-    print("[Pipeline] Step 3: Creating TTF font...")
+    # Step 2: Create font
+    print("[Pipeline] Step 2: Creating TTF font...")
     ttf_path = OUTPUT_DIR / f"{font_name}.ttf"
     svg_dir = glyph_dir / "svg"
 
@@ -364,7 +404,8 @@ def run_full_pipeline(
         svg_files = list(svg_dir.glob("*.svg"))
         if svg_files:
             svg_path = OUTPUT_DIR / f"{font_name}_sample.svg"
-            svg_files[0].rename(svg_path) if not svg_path.exists() else None
+            if not svg_path.exists():
+                svg_files[0].rename(svg_path)
         else:
             svg_path = None
 
@@ -372,3 +413,4 @@ def run_full_pipeline(
         return svg_path, ttf_path
     else:
         return None, None
+
