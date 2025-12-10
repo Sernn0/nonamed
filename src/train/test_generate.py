@@ -83,6 +83,7 @@ def test_generate():
             continue
 
         c_vec = content_latents[c_idx:c_idx+1] # (1, 64)
+        c_vec = tf.convert_to_tensor(c_vec, dtype=tf.float32)
 
         # Decode
         pred = decoder([c_vec, style_vec], training=False)
