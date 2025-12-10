@@ -166,7 +166,7 @@ def main():
     optimizer = keras.optimizers.Adam(learning_rate=args.lr)
     mse_loss = keras.losses.MeanSquaredError()
 
-    # 4. Custom Training Step
+    # 4. Custom Training Step with Weighted Loss
     @tf.function
     def train_step(images, content_vecs):
         with tf.GradientTape() as tape:
@@ -174,14 +174,18 @@ def main():
             style_vecs = style_encoder(images, training=True)
 
             # 2. Decode (Content + Style)
-            # Decoder expects list [content, style]
             preds = decoder([content_vecs, style_vecs], training=True)
 
-            # 3. Loss
-            loss = mse_loss(images, preds)
+            # 3. Weighted Loss
+            # images: 0=black(glyph), 1=white(ckpt)
+            # We want to penalize errors on black pixels (glyph) more.
+            # Weight = 1 + (1 - target) * 20  -> White pixel weight=1, Black pixel weight=21
+            weights = 1.0 + (1.0 - images) * 20.0
+
+            mse = tf.square(images - preds)
+            loss = tf.reduce_mean(weights * mse)
 
         # Gradients
-        # Train BOTH Style Encoder and Decoder
         trainable_vars = style_encoder.trainable_variables + decoder.trainable_variables
         grads = tape.gradient(loss, trainable_vars)
         optimizer.apply_gradients(zip(grads, trainable_vars))
@@ -191,7 +195,11 @@ def main():
     def val_step(images, content_vecs):
         style_vecs = style_encoder(images, training=False)
         preds = decoder([content_vecs, style_vecs], training=False)
-        loss = mse_loss(images, preds)
+
+        # Consistent weighted loss for validation
+        weights = 1.0 + (1.0 - images) * 20.0
+        mse = tf.square(images - preds)
+        loss = tf.reduce_mean(weights * mse)
         return loss
 
     # 5. Run Training
