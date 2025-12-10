@@ -41,14 +41,15 @@ OUTPUT_DIR = ROOT / "outputs"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 파이프라인 모듈 (지연 로딩)
+# 파이프라인 모듈 (v2 - 이진 폰트 학습 모델)
 PIPELINE_AVAILABLE = False
 try:
-    from src.inference.pipeline import run_full_pipeline, finetune_decoder, generate_all_glyphs, create_ttf_font
+    from src.inference.pipeline_v2 import generate_all_glyphs_v2
+    from src.inference.pipeline import create_ttf_font  # TTF 생성은 기존 것 사용
     PIPELINE_AVAILABLE = True
-    print("[UI] Pipeline loaded successfully!")
+    print("[UI] Pipeline v2 loaded successfully!")
 except ImportError as e:
-    print(f"[UI] Pipeline import failed: {e}")
+    print(f"[UI] Pipeline v2 import failed: {e}")
 
 # Drag & Drop (필수 의존성)
 from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -575,11 +576,11 @@ class App(TkinterDnD.Tk):
         work_dir = OUTPUT_DIR / "pipeline_work"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate all glyphs using user's style (no fine-tuning needed!)
-        print(f"[UI] Calling generate_all_glyphs with {len(processed_images)} style images")
+        # Generate all glyphs using v2 pipeline (binary font trained model)
+        print(f"[UI] Calling generate_all_glyphs_v2 with {len(processed_images)} style images")
         glyph_dir = work_dir / "glyphs"
         try:
-            glyph_paths = generate_all_glyphs(
+            glyph_paths = generate_all_glyphs_v2(
                 style_images=processed_images,
                 output_dir=glyph_dir,
             )

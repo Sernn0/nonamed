@@ -67,14 +67,21 @@ def process_font(font_path: Path, chars: list) -> int:
         return 0
 
     count = 0
+    errors = 0
     for char in chars:
         codepoint = ord(char)
-        img = render_char(char, font)
+        try:
+            img = render_char(char, font)
+            out_path = output_dir / f"U+{codepoint:04X}.png"
+            img.save(out_path)
+            count += 1
+        except Exception as e:
+            errors += 1
+            if errors == 1:  # Only print first error
+                print(f"  [WARN] Skipped char error: {e}")
 
-        # Save as U+XXXX.png
-        out_path = output_dir / f"U+{codepoint:04X}.png"
-        img.save(out_path)
-        count += 1
+    if errors > 0:
+        print(f"  [WARN] Skipped {errors} characters with errors")
 
     return count
 
