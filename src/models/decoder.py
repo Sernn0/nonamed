@@ -22,9 +22,10 @@ def build_decoder(
     content_input = tf.keras.Input(shape=(content_dim,), name="content_vec")
     style_input = tf.keras.Input(shape=(style_dim,), name="style_vec")
 
-    # Content Latents are large (-11 ~ 10), potentially causing saturation.
-    # Scale them down to ~ (-1 ~ 1) range.
-    scaled_content = tf.keras.layers.Lambda(lambda t: t * 0.1, name="scale_content")(content_input)
+    # Content Latents are large (-24 ~ 23), potentially causing saturation.
+    # Scale them down to ~ (-1.2 ~ 1.2) range to match style vectors (-0.3 ~ 0.3).
+    # Using 0.05 scaling factor.
+    scaled_content = tf.keras.layers.Lambda(lambda t: t * 0.05, name="scale_content")(content_input)
 
     x = tf.keras.layers.Concatenate(name="concat_latent")([scaled_content, style_input])
 

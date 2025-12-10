@@ -155,14 +155,7 @@ def main():
     # We *could* transfer weights for the convolutional layers if we want.
     # For now, let's train from scratch or handle weight transfer later if convergence is slow.
 
-    # 3. Training Loop Setup with Learning Rate Scheduler
-    lr_schedule = keras.optimizers.schedules.CosineDecay(
-        initial_learning_rate=args.lr,
-        decay_steps=args.epochs * 1000,  # Will be adjusted
-        alpha=0.01  # Final LR = initial * 0.01
-    )
-    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=1.0)
-
+    # 3. Optimizer will be created after dataset so we know steps_per_epoch
     # Loss weights
     MSE_WEIGHT = 0.4
     L1_WEIGHT = 0.4
@@ -226,6 +219,16 @@ def main():
     # Create tf.data.Dataset (parallel loading)
     train_dataset, n_train, steps_per_epoch = create_dataset(args.train_index, args.content_latents, unified_mapping, args.batch_size, shuffle=True)
     val_dataset, n_val, val_steps = create_dataset(args.val_index, args.content_latents, unified_mapping, args.batch_size, shuffle=False)
+
+    # Now create optimizer with correct decay_steps
+    total_steps = steps_per_epoch * args.epochs
+    lr_schedule = keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=args.lr,
+        decay_steps=total_steps,
+        alpha=0.01  # Final LR = initial * 0.01
+    )
+    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule, clipnorm=1.0)
+    print(f"[INFO] Total training steps: {total_steps}, LR decay from {args.lr} to {args.lr * 0.01}")
 
     best_val_loss = float('inf')
 
